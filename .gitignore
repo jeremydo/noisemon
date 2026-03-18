@@ -1,0 +1,23 @@
+# User-specific config (contains credentials and home location)
+config.py
+
+# Trained models and training data (personal/large)
+models/classifier.joblib
+models/features.npz
+models/features_no_birds.npz
+models/anomaly.joblib
+models/*.bak*
+
+# YAMNet TFLite model (large binary — download separately)
+models/yamnet.tflite
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Runtime state
+*.log
+flask_secret.key
