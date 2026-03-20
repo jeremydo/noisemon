@@ -2,8 +2,10 @@
 # config.py is gitignored so your secrets and location stay private.
 
 # ── Web dashboard auth ────────────────────────────────────────────────────────
-AUTH_USER = "noisemon"          # username for the web UI login
-AUTH_PASS = "change_me"         # password for the web UI login
+# Map of username → password. Add as many users as needed.
+AUTH_USERS = {
+    "noisemon": "change_me",
+}
 
 # ── ADS-B location ───────────────────────────────────────────────────────────
 # Used to correlate aircraft detections with live ADS-B traffic overhead.

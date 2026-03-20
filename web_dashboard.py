@@ -9,7 +9,7 @@ from datetime import datetime
 DB_PATH     = "/var/lib/noisemon/noise.db"
 
 try:
-    from config import AUTH_USER, AUTH_PASS
+    from config import AUTH_USERS
 except ImportError:
     raise SystemExit("config.py not found — copy config.example.py to config.py and set your credentials")
 DB_CEILING  = 110.0    # dB — readings above this are excluded from all stats/charts
@@ -44,8 +44,7 @@ def ts_to_iso(ts):
 def login():
     error = ""
     if request.method == "POST":
-        if request.form.get("username") == AUTH_USER and \
-           request.form.get("password") == AUTH_PASS:
+        if AUTH_USERS.get(request.form.get("username")) == request.form.get("password"):
             session["authed"] = True
             return redirect(request.args.get("next") or "/")
         error = "Invalid credentials"
