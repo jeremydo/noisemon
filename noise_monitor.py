@@ -367,6 +367,14 @@ class SustainedSourceDetector:
             self._baseline.append(db)
             self._recent.append((ts, db, fl, fm, fh))
 
+    def get_ambient(self) -> float | None:
+        """Return current ambient estimate (10th-percentile of rolling baseline).
+        Returns None if fewer than 60 seconds of data have accumulated."""
+        with self._lock:
+            if len(self._baseline) < 60:
+                return None
+            return float(np.percentile(list(self._baseline), 10))
+
     def detect(self, window_seconds: int = 30):
         """
         Analyse the last `window_seconds` of data.
@@ -845,6 +853,12 @@ class AudioProcessor:
                 log.info("SustainedDet confirmed %-14s  conf=%.0f%%", cat, conf * 100)
 
         # ── Log each newly-confirmed source with per-source dedup ─────────────
+        # Gate events against the rolling ambient: a source that has become the
+        # sustained background (e.g. pool heater running for hours) will be
+        # absorbed into the ambient baseline after ~5 min and will no longer
+        # exceed ambient + SUSTAINED_ENERGY_ABOVE, suppressing false events.
+        current_ambient = self._sustained.get_ambient()
+
         for cat, score in yamnet_confirmed.items():
             if cat in SUPPRESS_CATEGORIES:
                 continue  # suppressed — still used internally for voice/bird logic
@@ -855,6 +869,10 @@ class AudioProcessor:
             min_db = CATEGORY_MIN_DB.get(cat)
             if min_db is not None and db_mean < min_db:
                 log.debug("EVENT suppressed %-14s  dB=%.1f < min %.1f", cat, db_mean, min_db)
+                continue
+            if current_ambient is not None and db_mean < current_ambient + SUSTAINED_ENERGY_ABOVE:
+                log.debug("EVENT suppressed %-14s  dB=%.1f not above ambient %.1f + %.1f",
+                          cat, db_mean, current_ambient, SUSTAINED_ENERGY_ABOVE)
                 continue
 
             # Snapshot ADS-B aircraft for aircraft events
