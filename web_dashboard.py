@@ -155,6 +155,21 @@ def api_summary():
             GROUP BY source ORDER BY cnt DESC
         """, (now-86400, CONFIDENCE_MIN)).fetchall()
 
+        # ── Same-weekday baseline (last 6 matching weekdays, excluding today) ──
+        # Computes per-day L90/L10 for each reference day, then takes the median.
+        # SQLite %w: 0=Sunday … 6=Saturday; Python weekday(): 0=Monday … 6=Sunday.
+        today_dt       = datetime.now()
+        today_start_ts = int(today_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        sqlite_dow     = str((today_dt.weekday() + 1) % 7)
+        rows_baseline  = c.execute("""
+            SELECT db_avg, ts,
+                   CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) as hour
+            FROM measurements
+            WHERE ts >= ? AND ts < ?
+              AND db_avg IS NOT NULL AND db_avg < ?
+              AND strftime('%w', ts, 'unixepoch', 'localtime') = ?
+        """, (today_start_ts - 49 * 86400, today_start_ts, DB_CEILING, sqlite_dow)).fetchall()
+
     day_vals   = sorted(r["db_avg"] for r in rows_24h
                         if DAY_START <= r["hour"] < DAY_END)
     night_vals = sorted(r["db_avg"] for r in rows_24h
@@ -166,18 +181,73 @@ def api_summary():
             return None
         return round(vals[min(int(len(vals) * p / 100), len(vals) - 1)], 1)
 
+    # ── Per-day baseline L90/L10 from same-weekday reference days ──
+    from collections import defaultdict
+    ref_day  = defaultdict(list)   # date_str -> day-hour db_avg values
+    ref_night= defaultdict(list)
+    for r in rows_baseline:
+        date_key = datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d")
+        if DAY_START <= r["hour"] < DAY_END:
+            ref_day[date_key].append(r["db_avg"])
+        else:
+            ref_night[date_key].append(r["db_avg"])
+
+    def daily_pct(readings_by_day, p):
+        """Return median of per-day p-th percentiles across reference days."""
+        daily = []
+        for vals in readings_by_day.values():
+            if len(vals) < 60:   # skip days with < 1 min of data
+                continue
+            s = sorted(vals)
+            daily.append(s[min(int(len(s) * p / 100), len(s) - 1)])
+        if not daily:
+            return None
+        daily.sort()
+        return round(daily[len(daily) // 2], 1)
+
+    def delta(today_val, base_val):
+        if today_val is None or base_val is None:
+            return None
+        return round(today_val - base_val, 1)
+
+    baseline_days_n   = len(ref_day)   # number of reference days found
+    b_day_l90  = daily_pct(ref_day,   10)
+    b_day_l10  = daily_pct(ref_day,   90)
+    b_night_l90= daily_pct(ref_night, 10)
+    b_night_l10= daily_pct(ref_night, 90)
+
+    day_l90   = pct(day_vals,   10)
+    day_l10   = pct(day_vals,   90)
+    night_l90 = pct(night_vals, 10)
+    night_l10 = pct(night_vals, 90)
+
+    day_nc    = round(day_l10   - day_l90,   1) if day_l10   and day_l90   else None
+    night_nc  = round(night_l10 - night_l90, 1) if night_l10 and night_l90 else None
+    b_day_nc  = round(b_day_l10  - b_day_l90,  1) if b_day_l10  and b_day_l90  else None
+    b_night_nc= round(b_night_l10- b_night_l90, 1) if b_night_l10 and b_night_l90 else None
+
     return jsonify({
         "current_db":  round(last["db_avg"], 1)  if last and last["db_avg"]  else None,
         "peak_db":     round(last["db_peak"], 1) if last and last["db_peak"] else None,
         "week_max":    round(week_max["m"], 1)   if week_max and week_max["m"] else None,
         # L90 = 10th percentile = background noise floor (exceeded 90% of the time)
         # L10 = 90th percentile = intrusive noise level  (exceeded 10% of the time)
-        "day_l90":     pct(day_vals,   10),
-        "day_l10":     pct(day_vals,   90),
-        "night_l90":   pct(night_vals, 10),
-        "night_l10":   pct(night_vals, 90),
-        "day_n":       len(day_vals),
-        "night_n":     len(night_vals),
+        # NC  = noise climate = L10 − L90 (spread; wider = more intrusive events)
+        "day_l90":          day_l90,
+        "day_l10":          day_l10,
+        "day_nc":           day_nc,
+        "night_l90":        night_l90,
+        "night_l10":        night_l10,
+        "night_nc":         night_nc,
+        "delta_day_l90":    delta(day_l90,   b_day_l90),
+        "delta_day_l10":    delta(day_l10,   b_day_l10),
+        "delta_day_nc":     delta(day_nc,    b_day_nc),
+        "delta_night_l90":  delta(night_l90, b_night_l90),
+        "delta_night_l10":  delta(night_l10, b_night_l10),
+        "delta_night_nc":   delta(night_nc,  b_night_nc),
+        "baseline_days_n":  baseline_days_n,
+        "day_n":            len(day_vals),
+        "night_n":          len(night_vals),
         "top_sources": [{"source": r["source"], "count": r["cnt"]} for r in event_counts],
     })
 
@@ -452,6 +522,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .stat-item .stat-val{font-size:1.35rem;font-weight:700}
   .stat-item .stat-lbl{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .stat-item .stat-sub{font-size:.68rem;color:var(--muted);margin-top:1px}
+  .stat-delta{font-size:.72rem;font-weight:600;margin-left:.3rem;vertical-align:middle}
+  .delta-up{color:#f87171}
+  .delta-dn{color:#4ade80}
+  .delta-ok{color:var(--muted)}
+  .stat-nc{grid-column:span 2;border-top:1px solid var(--border);margin-top:.3rem;padding-top:.4rem}
+  .baseline-lbl{font-size:.63rem;color:var(--muted);margin-top:.6rem;letter-spacing:.03em}
   .charts{padding:0 2rem 2rem;display:grid;gap:1.5rem}
   .chart-box{background:var(--panel);border:1px solid var(--border);
              border-radius:12px;padding:1.2rem}
@@ -516,31 +592,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="lbl">☀️ Day (7am–10pm)</div>
     <div class="stat-grid">
       <div class="stat-item">
-        <div class="stat-val" id="c-day-l90">—</div>
-        <div class="stat-lbl">L90</div>
-        <div class="stat-sub">background floor</div>
+        <div><span class="stat-val" id="c-day-l90">—</span><span id="c-day-l90-d"></span></div>
+        <div class="stat-lbl">L90 <span class="stat-sub">background floor</span></div>
       </div>
       <div class="stat-item">
-        <div class="stat-val" id="c-day-l10">—</div>
-        <div class="stat-lbl">L10</div>
-        <div class="stat-sub">intrusive level</div>
+        <div><span class="stat-val" id="c-day-l10">—</span><span id="c-day-l10-d"></span></div>
+        <div class="stat-lbl">L10 <span class="stat-sub">intrusive level</span></div>
+      </div>
+      <div class="stat-item stat-nc">
+        <div><span class="stat-val" id="c-day-nc">—</span><span id="c-day-nc-d"></span></div>
+        <div class="stat-lbl">Noise climate <span class="stat-sub">L10−L90 spread</span></div>
       </div>
     </div>
+    <div class="baseline-lbl" id="c-day-base-lbl"></div>
   </div>
   <div class="card">
     <div class="lbl">🌙 Night (10pm–7am)</div>
     <div class="stat-grid">
       <div class="stat-item">
-        <div class="stat-val" id="c-night-l90">—</div>
-        <div class="stat-lbl">L90</div>
-        <div class="stat-sub">background floor</div>
+        <div><span class="stat-val" id="c-night-l90">—</span><span id="c-night-l90-d"></span></div>
+        <div class="stat-lbl">L90 <span class="stat-sub">background floor</span></div>
       </div>
       <div class="stat-item">
-        <div class="stat-val" id="c-night-l10">—</div>
-        <div class="stat-lbl">L10</div>
-        <div class="stat-sub">intrusive level</div>
+        <div><span class="stat-val" id="c-night-l10">—</span><span id="c-night-l10-d"></span></div>
+        <div class="stat-lbl">L10 <span class="stat-sub">intrusive level</span></div>
+      </div>
+      <div class="stat-item stat-nc">
+        <div><span class="stat-val" id="c-night-nc">—</span><span id="c-night-nc-d"></span></div>
+        <div class="stat-lbl">Noise climate <span class="stat-sub">L10−L90 spread</span></div>
       </div>
     </div>
+    <div class="baseline-lbl" id="c-night-base-lbl"></div>
   </div>
   <div class="card">
     <div class="lbl">7-day Peak</div>
@@ -630,11 +712,35 @@ async function refresh() {
 
   // Cards
   document.getElementById("c-cur").innerHTML      = formatDB(summ.current_db);
-  document.getElementById("c-day-l90").innerHTML  = formatDB(summ.day_l90);
-  document.getElementById("c-day-l10").innerHTML  = formatDB(summ.day_l10);
-  document.getElementById("c-night-l90").innerHTML= formatDB(summ.night_l90);
-  document.getElementById("c-night-l10").innerHTML= formatDB(summ.night_l10);
   document.getElementById("c-peak").innerHTML     = formatDB(summ.week_max);
+
+  function fmtDelta(d) {
+    if (d === null || d === undefined) return "";
+    const sign = d > 0 ? "+" : "";
+    const cls  = d >  1.5 ? "delta-up" : d < -1.5 ? "delta-dn" : "delta-ok";
+    return `<span class="stat-delta ${cls}">${sign}${d.toFixed(1)}</span>`;
+  }
+
+  document.getElementById("c-day-l90").innerHTML   = formatDB(summ.day_l90);
+  document.getElementById("c-day-l90-d").innerHTML = fmtDelta(summ.delta_day_l90);
+  document.getElementById("c-day-l10").innerHTML   = formatDB(summ.day_l10);
+  document.getElementById("c-day-l10-d").innerHTML = fmtDelta(summ.delta_day_l10);
+  document.getElementById("c-day-nc").innerHTML    = formatDB(summ.day_nc);
+  document.getElementById("c-day-nc-d").innerHTML  = fmtDelta(summ.delta_day_nc);
+
+  document.getElementById("c-night-l90").innerHTML   = formatDB(summ.night_l90);
+  document.getElementById("c-night-l90-d").innerHTML = fmtDelta(summ.delta_night_l90);
+  document.getElementById("c-night-l10").innerHTML   = formatDB(summ.night_l10);
+  document.getElementById("c-night-l10-d").innerHTML = fmtDelta(summ.delta_night_l10);
+  document.getElementById("c-night-nc").innerHTML    = formatDB(summ.night_nc);
+  document.getElementById("c-night-nc-d").innerHTML  = fmtDelta(summ.delta_night_nc);
+
+  const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const todayName = dayNames[new Date().getDay()];
+  const n = summ.baseline_days_n;
+  const baseLbl = n >= 2 ? `vs typical ${todayName} · ${n} week${n>1?"s":""}` : "building baseline\u2026";
+  document.getElementById("c-day-base-lbl").textContent   = baseLbl;
+  document.getElementById("c-night-base-lbl").textContent = baseLbl;
 
   const maxCnt = Math.max(1, ...summ.top_sources.map(s=>s.count));
   document.getElementById("top-sources").innerHTML =
