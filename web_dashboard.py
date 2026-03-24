@@ -916,13 +916,25 @@ async function refresh() {
           <td><span style="color:${e.conf>70?"#22c55e":e.conf>45?"#f59e0b":"#94a3b8"}">${e.conf}%</span></td>
           <td>${e.db}</td>
           <td style="font-size:.78rem;max-width:220px">${formatADSB(e.adsb)}</td>
-          <td>${e.clip ? `<button class="play-btn" onclick="playClip('/clips/${e.clip}','${e.source}','${e.t}',this)">▶ Play</button>` : ""}</td>
+          <td>${e.clip ? `<button class="play-btn" data-clip="${e.clip}" onclick="playClip('/clips/${e.clip}','${e.source}','${e.t}',this)">▶ Play</button>` : ""}</td>
         </tr>`).join("")}
       </tbody>
     </table>`;
 
   document.getElementById("last-update").textContent =
     "Updated " + (summ.last_ts ? new Date(summ.last_ts).toLocaleTimeString() : new Date().toLocaleTimeString());
+
+  // Re-sync play button state after table rebuild
+  if (_clipAudio.dataset.src) {
+    const clip = _clipAudio.dataset.src.replace("/clips/", "");
+    const btn  = document.querySelector(`.play-btn[data-clip="${clip}"]`);
+    if (btn) {
+      _activeBtn = btn;
+      const playing = !_clipAudio.paused;
+      btn.classList.toggle("active", playing);
+      btn.textContent = playing ? "⏸ Pause" : "▶ Play";
+    }
+  }
 }
 
 // ── Clip player ───────────────────────────────────────────────────────────────
@@ -939,7 +951,10 @@ let   _activeBtn  = null;
 
 function _setPlayingState(on) {
   _clipPlayer.classList.toggle("is-playing", on);
-  if (_activeBtn) _activeBtn.classList.toggle("active", on);
+  if (_activeBtn) {
+    _activeBtn.classList.toggle("active", on);
+    _activeBtn.textContent = on ? "⏸ Pause" : "▶ Play";
+  }
 }
 
 _clipAudio.addEventListener("play",  () => _setPlayingState(true));
@@ -947,8 +962,17 @@ _clipAudio.addEventListener("pause", () => _setPlayingState(false));
 _clipAudio.addEventListener("ended", () => _setPlayingState(false));
 
 function playClip(src, source, time, btn) {
-  // Mark the clicked button as active; clear the previous one
-  if (_activeBtn && _activeBtn !== btn) _activeBtn.classList.remove("active");
+  // Same clip already playing — toggle pause
+  if (_clipAudio.dataset.src === src && !_clipAudio.paused) {
+    _clipAudio.pause();
+    return;
+  }
+
+  // Clear previous active button
+  if (_activeBtn && _activeBtn !== btn) {
+    _activeBtn.classList.remove("active");
+    _activeBtn.textContent = "▶ Play";
+  }
   _activeBtn = btn || null;
 
   const label = (SOURCE_ICONS[source] || "🔊") + " " +
@@ -963,7 +987,8 @@ function playClip(src, source, time, btn) {
   }
 
   if (_clipAudio.dataset.src === src) {
-    seekAndPlay();
+    // Same clip but was paused — resume from where it stopped rather than seeking back
+    _clipAudio.play().catch(() => {});
   } else {
     _clipAudio.dataset.src = src;
     _clipAudio.src = src;
