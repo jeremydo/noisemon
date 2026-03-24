@@ -547,6 +547,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .src-bar-bg{flex:1;background:#252838;border-radius:4px;height:10px;overflow:hidden}
   .src-bar{height:100%;border-radius:4px;transition:width .4s}
   .src-cnt{width:30px;text-align:right;color:var(--muted)}
+  .play-btn{background:#6366f122;border:1px solid #6366f144;color:var(--text);
+            border-radius:6px;padding:.2rem .55rem;cursor:pointer;font-size:.82rem;
+            white-space:nowrap}
+  .play-btn:hover{background:#6366f144}
+  #clip-player{position:fixed;bottom:0;left:0;right:0;background:var(--panel);
+               border-top:1px solid var(--border);padding:.6rem 2rem;
+               display:none;align-items:center;gap:1rem;z-index:100;
+               box-shadow:0 -4px 16px #0006}
+  #clip-player-info{font-size:.85rem;min-width:0;flex:0 0 auto;max-width:280px;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #clip-player audio{flex:1;height:36px;min-width:0}
+  #clip-player audio::-webkit-media-controls-panel{background:#252838}
+  #clip-close{background:none;border:none;color:var(--muted);cursor:pointer;
+              font-size:1.1rem;padding:.1rem .4rem;line-height:1}
+  #clip-close:hover{color:var(--text)}
+  body{padding-bottom:70px}
 </style>
 </head>
 <body>
@@ -876,8 +892,7 @@ async function refresh() {
           <td><span style="color:${e.conf>70?"#22c55e":e.conf>45?"#f59e0b":"#94a3b8"}">${e.conf}%</span></td>
           <td>${e.db}</td>
           <td style="font-size:.78rem;max-width:220px">${formatADSB(e.adsb)}</td>
-          <td>${e.clip ? `<audio controls preload="metadata" style="height:28px;width:180px">
-            <source src="/clips/${e.clip}" type="audio/wav"></audio>` : ""}</td>
+          <td>${e.clip ? `<button class="play-btn" onclick="playClip('/clips/${e.clip}','${e.source}','${e.t}')">▶ Play</button>` : ""}</td>
         </tr>`).join("")}
       </tbody>
     </table>`;
@@ -886,9 +901,57 @@ async function refresh() {
     "Updated " + new Date().toLocaleTimeString();
 }
 
+// ── Clip player ───────────────────────────────────────────────────────────────
+// Clips are: PRE_ROLL(30s) of audio before detection + up to POST_ROLL(90s) after.
+// The YAMNet inference window that triggered the event spans the last HISTORY(20s)
+// of the pre-roll, i.e. t=10s–30s in the clip. Start playback at t=10s so the
+// listener hears the build-up that drove the classification, then the event itself.
+const CLIP_DETECT_OFFSET = 10;  // seconds into clip where detection window begins
+
+const _clipAudio  = document.getElementById("clip-audio");
+const _clipPlayer = document.getElementById("clip-player");
+const _clipInfo   = document.getElementById("clip-player-info");
+
+function playClip(src, source, time) {
+  const label = (SOURCE_ICONS[source] || "🔊") + " " +
+                source.replace(/_/g, " ") + " · " +
+                new Date(time).toLocaleString();
+  _clipInfo.textContent = label;
+  _clipPlayer.style.display = "flex";
+
+  function seekAndPlay() {
+    _clipAudio.currentTime = CLIP_DETECT_OFFSET;
+    _clipAudio.play().catch(() => {});
+  }
+
+  if (_clipAudio.dataset.src === src) {
+    // Same clip already loaded — just seek and play
+    seekAndPlay();
+  } else {
+    _clipAudio.dataset.src = src;
+    _clipAudio.src = src;
+    _clipAudio.addEventListener("canplay", function onready() {
+      _clipAudio.removeEventListener("canplay", onready);
+      seekAndPlay();
+    });
+    _clipAudio.load();
+  }
+}
+
+function closePlayer() {
+  _clipAudio.pause();
+  _clipPlayer.style.display = "none";
+}
+
 refresh();
 setInterval(refresh, 10000);
 </script>
+
+<div id="clip-player">
+  <span id="clip-player-info"></span>
+  <audio id="clip-audio" preload="auto"></audio>
+  <button id="clip-close" title="Close" onclick="closePlayer()">✕</button>
+</div>
 </body>
 </html>
 """
