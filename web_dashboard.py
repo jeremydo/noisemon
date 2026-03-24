@@ -137,7 +137,7 @@ def api_summary():
 
     with get_conn() as c:
         last = c.execute(
-            "SELECT db_avg, db_peak FROM measurements ORDER BY ts DESC LIMIT 1"
+            "SELECT ts, db_avg, db_peak FROM measurements ORDER BY ts DESC LIMIT 1"
         ).fetchone()
         rows_24h = c.execute("""
             SELECT db_avg,
@@ -229,6 +229,7 @@ def api_summary():
     return jsonify({
         "current_db":  round(last["db_avg"], 1)  if last and last["db_avg"]  else None,
         "peak_db":     round(last["db_peak"], 1) if last and last["db_peak"] else None,
+        "last_ts":     ts_to_iso(last["ts"])     if last and last["ts"]      else None,
         "week_max":    round(week_max["m"], 1)   if week_max and week_max["m"] else None,
         # L90 = 10th percentile = background noise floor (exceeded 90% of the time)
         # L10 = 90th percentile = intrusive noise level  (exceeded 10% of the time)
@@ -920,7 +921,7 @@ async function refresh() {
     </table>`;
 
   document.getElementById("last-update").textContent =
-    "Updated " + new Date().toLocaleTimeString();
+    "Updated " + (summ.last_ts ? new Date(summ.last_ts).toLocaleTimeString() : new Date().toLocaleTimeString());
 }
 
 // ── Clip player ───────────────────────────────────────────────────────────────
