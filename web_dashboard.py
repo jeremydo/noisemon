@@ -120,6 +120,7 @@ def api_events():
         """, (since, CONFIDENCE_MIN, *suppress)).fetchall()
 
     return jsonify([{
+        "ts":     r["ts_start"],
         "t":      ts_to_iso(r["ts_start"]),
         "source": r["source"],
         "conf":   round(r["confidence"]*100),
@@ -360,6 +361,30 @@ def api_save_segments():
 
     return jsonify({"saved": len(segments)})
 
+@app.route("/api/correct_event", methods=["POST"])
+@require_auth
+def api_correct_event():
+    """Quick-correct the source label of a detected event from the main dashboard.
+    Replaces any existing segments for the clip with the single corrected label,
+    and updates the displayed source on the event row immediately."""
+    data      = request.json
+    ts_start  = data.get("ts_start")
+    clip_path = data.get("clip_path")
+    label     = data.get("label")
+    if not all([ts_start is not None, clip_path, label]):
+        return jsonify({"error": "missing fields"}), 400
+    with get_conn() as c:
+        c.execute("DELETE FROM segments WHERE clip_path=?", (clip_path,))
+        c.execute(
+            "INSERT INTO segments (clip_path,t_start,t_end,label) VALUES (?,?,?,?)",
+            (clip_path, 0.0, 120.0, label)
+        )
+        c.execute(
+            "UPDATE events SET source=? WHERE ts_start=? AND clip_path=?",
+            (label, ts_start, clip_path)
+        )
+    return jsonify({"ok": True})
+
 @app.route("/api/segments/<path:clip_path>")
 @require_auth
 def api_get_segments(clip_path):
@@ -580,6 +605,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               font-size:1.1rem;padding:.1rem .4rem;line-height:1}
   #clip-close:hover{color:var(--text)}
   body{padding-bottom:70px}
+  .fix-btn{background:none;border:1px solid var(--border);color:var(--muted);
+           border-radius:6px;padding:.18rem .4rem;cursor:pointer;font-size:.75rem;
+           margin-left:.3rem;vertical-align:middle}
+  .fix-btn:hover{background:#252838;color:var(--text)}
+  #label-picker{position:fixed;background:var(--panel);border:1px solid var(--border);
+                border-radius:10px;padding:.7rem .8rem;z-index:400;display:none;
+                box-shadow:0 8px 28px #000a;min-width:260px}
+  #label-picker-hdr{display:flex;justify-content:space-between;align-items:center;
+                    font-size:.75rem;color:var(--muted);margin-bottom:.5rem}
+  #label-picker-hdr button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;line-height:1;padding:0}
+  #label-picker-hdr button:hover{color:var(--text)}
+  #label-picker-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem}
+  .lp-btn{background:#1e2030;border:1px solid transparent;color:var(--text);border-radius:6px;
+          padding:.35rem .4rem;cursor:pointer;font-size:.78rem;text-align:left;
+          white-space:nowrap;transition:background .12s}
+  .lp-btn:hover{background:#2d3148}
+  .lp-btn.lp-current{border-color:#6366f166;background:#6366f122}
 </style>
 </head>
 <body>
@@ -663,6 +705,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="lbl">Top Sources Today</div>
     <div id="top-sources" class="source-bars" style="margin-top:.75rem;text-align:left"></div>
   </div>
+</div>
+
+<div id="label-picker">
+  <div id="label-picker-hdr">
+    <span>Correct label</span>
+    <button onclick="closePicker()">✕</button>
+  </div>
+  <div id="label-picker-grid"></div>
 </div>
 
 <div id="clip-player">
@@ -908,11 +958,13 @@ async function refresh() {
         <th>Time</th><th>Source</th><th>Confidence</th><th>dB(A)</th><th>Aircraft / ADS-B</th><th>Clip</th>
       </tr></thead>
       <tbody>${evts.slice(0,100).map(e=>`
-        <tr>
+        <tr data-ts="${e.ts}">
           <td style="color:var(--muted)">${new Date(e.t).toLocaleString()}</td>
           <td><span class="badge" style="background:${SOURCE_COLORS[e.source]||"#6366f1"}22;
               color:${SOURCE_COLORS[e.source]||"#6366f1"}">
-            ${SOURCE_ICONS[e.source]||"🔊"} ${e.source.replace(/_/g," ")}</span></td>
+            ${SOURCE_ICONS[e.source]||"🔊"} ${e.source.replace(/_/g," ")}</span>
+            ${e.clip ? `<button class="fix-btn" title="Correct label" onclick="openPicker(${e.ts},'${e.clip}','${e.source}',event)">✏</button>` : ""}
+          </td>
           <td><span style="color:${e.conf>70?"#22c55e":e.conf>45?"#f59e0b":"#94a3b8"}">${e.conf}%</span></td>
           <td>${e.db}</td>
           <td style="font-size:.78rem;max-width:220px">${formatADSB(e.adsb)}</td>
@@ -935,6 +987,62 @@ async function refresh() {
       btn.textContent = playing ? "⏸ Pause" : "▶ Play";
     }
   }
+}
+
+// ── Label correction picker ───────────────────────────────────────────────────
+const CORRECT_LABELS = [
+  ["aircraft","✈️"], ["road_traffic","🚗"], ["leaf_blower","🍃"],
+  ["lawn_mower","🌿"], ["strimmer","🌾"], ["voices","🗣️"],
+  ["birds","🐦"], ["crows","🐦‍⬛"], ["owl","🦉"],
+  ["music","🎵"], ["dog_barking","🐕"], ["false_positive","❌"],
+];
+
+const _picker     = document.getElementById("label-picker");
+const _pickerGrid = document.getElementById("label-picker-grid");
+let   _pickerTs   = null;
+let   _pickerClip = null;
+
+function openPicker(ts, clip, currentSource, evt) {
+  _pickerTs   = ts;
+  _pickerClip = clip;
+  _pickerGrid.innerHTML = CORRECT_LABELS.map(([label, icon]) =>
+    `<button class="lp-btn${label===currentSource?" lp-current":""}"
+             onclick="correctEvent('${label}')">${icon} ${label.replace(/_/g," ")}</button>`
+  ).join("");
+  // Position near the click, keeping within viewport
+  const x = Math.min(evt.clientX, window.innerWidth  - 280);
+  const y = Math.min(evt.clientY + 6, window.innerHeight - 220);
+  _picker.style.left    = x + "px";
+  _picker.style.top     = y + "px";
+  _picker.style.display = "block";
+  evt.stopPropagation();
+}
+
+function closePicker() { _picker.style.display = "none"; }
+document.addEventListener("click", e => { if (!_picker.contains(e.target)) closePicker(); });
+
+async function correctEvent(label) {
+  closePicker();
+  const res = await fetch("/api/correct_event", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ts_start: _pickerTs, clip_path: _pickerClip, label}),
+  });
+  if (!res.ok) return;
+  // Update the badge in-place without waiting for next refresh
+  const row   = document.querySelector(`tr[data-ts="${_pickerTs}"]`);
+  if (!row) return;
+  const badge = row.querySelector(".badge");
+  if (badge) {
+    badge.style.background = (SOURCE_COLORS[label]||"#6366f1") + "22";
+    badge.style.color      = SOURCE_COLORS[label]||"#6366f1";
+    // Preserve the fix button inside the td, only replace badge text nodes
+    badge.childNodes.forEach(n => { if (n.nodeType === 3) n.remove(); });
+    badge.innerHTML = `${SOURCE_ICONS[label]||"🔊"} ${label.replace(/_/g," ")}`;
+  }
+  // Update fix button's current source
+  const fixBtn = row.querySelector(".fix-btn");
+  if (fixBtn) fixBtn.setAttribute("onclick", `openPicker(${_pickerTs},'${_pickerClip}','${label}',event)`);
 }
 
 // ── Clip player ───────────────────────────────────────────────────────────────
