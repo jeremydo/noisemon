@@ -750,11 +750,14 @@ async function refresh() {
   document.getElementById("c-cur").innerHTML      = formatDB(summ.current_db);
   document.getElementById("c-peak").innerHTML     = formatDB(summ.week_max);
 
+  const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
   function fmtDelta(d) {
     if (d === null || d === undefined) return "";
     const sign = d > 0 ? "+" : "";
     const cls  = d >  1.5 ? "delta-up" : d < -1.5 ? "delta-dn" : "delta-ok";
-    return `<span class="stat-delta ${cls}">${sign}${d.toFixed(1)}</span>`;
+    const tip  = `${sign}${d.toFixed(1)} dB vs typical ${dayNames[new Date().getDay()]}. Red = noisier than usual, green = quieter.`;
+    return `<span class="stat-delta ${cls}" data-tip="${tip}">${sign}${d.toFixed(1)}</span>`;
   }
 
   document.getElementById("c-day-l90").innerHTML   = formatDB(summ.day_l90);
@@ -771,7 +774,6 @@ async function refresh() {
   document.getElementById("c-night-nc").innerHTML    = formatDB(summ.night_nc);
   document.getElementById("c-night-nc-d").innerHTML  = fmtDelta(summ.delta_night_nc);
 
-  const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
   const todayName = dayNames[new Date().getDay()];
   const n = summ.baseline_days_n;
   const baseLbl = n >= 2 ? `vs typical ${todayName} · ${n} week${n>1?"s":""}` : "building baseline\u2026";
