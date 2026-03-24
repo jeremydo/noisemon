@@ -650,6 +650,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<div id="clip-player">
+  <span id="clip-player-info"></span>
+  <audio id="clip-audio" preload="auto"></audio>
+  <button id="clip-close" title="Close" onclick="closePlayer()">✕</button>
+</div>
+
 <div class="charts">
   <div class="chart-box">
     <h2>📊 Noise Level Over Time
@@ -946,12 +952,6 @@ function closePlayer() {
 refresh();
 setInterval(refresh, 10000);
 </script>
-
-<div id="clip-player">
-  <span id="clip-player-info"></span>
-  <audio id="clip-audio" preload="auto"></audio>
-  <button id="clip-close" title="Close" onclick="closePlayer()">✕</button>
-</div>
 </body>
 </html>
 """
