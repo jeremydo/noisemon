@@ -571,6 +571,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     pointer-events:none;opacity:0;transition:opacity .15s;z-index:300;font-weight:400;
     text-transform:none;letter-spacing:0;box-shadow:0 4px 14px #0008}
   [data-tip]:hover::after{opacity:1}
+  [data-tip]:has([data-tip]:hover)::after{opacity:0}
   #clip-player-info{font-size:.85rem;min-width:0;flex:0 0 auto;max-width:280px;
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #clip-player audio{flex:1;height:36px;min-width:0}
