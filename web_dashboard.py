@@ -562,6 +562,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               flex-shrink:0;display:none}
   #clip-player.is-playing #clip-pulse{display:block;animation:cpulse 1.2s ease-in-out infinite}
   @keyframes cpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+  [data-tip]{position:relative;cursor:default}
+  [data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 8px);
+    left:50%;transform:translateX(-50%);background:#12141f;color:var(--text);
+    border:1px solid var(--border);border-radius:8px;padding:.45rem .65rem;
+    font-size:.72rem;line-height:1.5;white-space:normal;width:210px;text-align:left;
+    pointer-events:none;opacity:0;transition:opacity .15s;z-index:300;font-weight:400;
+    text-transform:none;letter-spacing:0;box-shadow:0 4px 14px #0008}
+  [data-tip]:hover::after{opacity:1}
   #clip-player-info{font-size:.85rem;min-width:0;flex:0 0 auto;max-width:280px;
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #clip-player audio{flex:1;height:36px;min-width:0}
@@ -608,46 +616,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <div class="cards">
   <div class="card">
-    <div class="lbl">Current dB(A)</div>
+    <div class="lbl" data-tip="A-weighted RMS level right now. A-weighting reduces low and high frequencies to match human hearing sensitivity.">Current dB(A)</div>
     <div class="val" id="c-cur">—</div>
-    <div class="card-sub-lbl">7-day Peak</div>
+    <div class="card-sub-lbl" data-tip="Highest flat (unweighted) instantaneous peak recorded in the last 7 days.">7-day Peak</div>
     <div class="card-sub-val" id="c-peak">—</div>
   </div>
   <div class="card">
     <div class="lbl">☀️ Day (7am–10pm)</div>
     <div class="stat-grid">
-      <div class="stat-item">
+      <div class="stat-item" data-tip="L90 — background noise floor. The level exceeded 90% of the time: what the neighbourhood always sounds like at baseline.">
         <div><span class="stat-val" id="c-day-l90">—</span><span id="c-day-l90-d"></span></div>
         <div class="stat-lbl">L90 floor</div>
       </div>
-      <div class="stat-item">
+      <div class="stat-item" data-tip="L10 — intrusive noise level. Exceeded only 10% of the time: represents significant events above the background.">
         <div><span class="stat-val" id="c-day-l10">—</span><span id="c-day-l10-d"></span></div>
         <div class="stat-lbl">L10 intrusive</div>
       </div>
-      <div class="stat-item stat-nc">
+      <div class="stat-item stat-nc" data-tip="Noise Climate (L10−L90). How variable the soundscape is. Narrow gap = steady background. Wide gap = frequent loud events above the floor.">
         <div><span class="stat-val" id="c-day-nc">—</span><span id="c-day-nc-d"></span></div>
         <div class="stat-lbl">NC (L10−L90)</div>
       </div>
     </div>
-    <div class="baseline-lbl" id="c-day-base-lbl"></div>
+    <div class="baseline-lbl" data-tip="Compared to the median of the same day of week over the last 6 weeks. Red = noisier than typical, green = quieter." id="c-day-base-lbl"></div>
   </div>
   <div class="card">
     <div class="lbl">🌙 Night (10pm–7am)</div>
     <div class="stat-grid">
-      <div class="stat-item">
+      <div class="stat-item" data-tip="L90 — background noise floor. The level exceeded 90% of the time: what the neighbourhood always sounds like at baseline.">
         <div><span class="stat-val" id="c-night-l90">—</span><span id="c-night-l90-d"></span></div>
         <div class="stat-lbl">L90 floor</div>
       </div>
-      <div class="stat-item">
+      <div class="stat-item" data-tip="L10 — intrusive noise level. Exceeded only 10% of the time: represents significant events above the background.">
         <div><span class="stat-val" id="c-night-l10">—</span><span id="c-night-l10-d"></span></div>
         <div class="stat-lbl">L10 intrusive</div>
       </div>
-      <div class="stat-item stat-nc">
+      <div class="stat-item stat-nc" data-tip="Noise Climate (L10−L90). How variable the soundscape is. Narrow gap = steady background. Wide gap = frequent loud events above the floor.">
         <div><span class="stat-val" id="c-night-nc">—</span><span id="c-night-nc-d"></span></div>
         <div class="stat-lbl">NC (L10−L90)</div>
       </div>
     </div>
-    <div class="baseline-lbl" id="c-night-base-lbl"></div>
+    <div class="baseline-lbl" data-tip="Compared to the median of the same day of week over the last 6 weeks. Red = noisier than typical, green = quieter." id="c-night-base-lbl"></div>
   </div>
   <div class="card" style="grid-column:span 2">
     <div class="lbl">Top Sources Today</div>
