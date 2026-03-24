@@ -518,16 +518,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         padding:1.2rem;text-align:center}
   .card .val{font-size:2rem;font-weight:700;margin:.3rem 0}
   .card .lbl{color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
-  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:.4rem .6rem;margin-top:.5rem}
-  .stat-item .stat-val{font-size:1.35rem;font-weight:700}
-  .stat-item .stat-lbl{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-  .stat-item .stat-sub{font-size:.68rem;color:var(--muted);margin-top:1px}
-  .stat-delta{font-size:.72rem;font-weight:600;margin-left:.3rem;vertical-align:middle}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:.3rem .4rem;margin-top:.5rem}
+  .stat-item .stat-val{font-size:1.2rem;font-weight:700}
+  .stat-item .stat-lbl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:.1rem}
+  .stat-delta{font-size:.68rem;font-weight:600;margin-left:.25rem;vertical-align:middle;white-space:nowrap}
   .delta-up{color:#f87171}
   .delta-dn{color:#4ade80}
   .delta-ok{color:var(--muted)}
-  .stat-nc{grid-column:span 2;border-top:1px solid var(--border);margin-top:.3rem;padding-top:.4rem}
-  .baseline-lbl{font-size:.63rem;color:var(--muted);margin-top:.6rem;letter-spacing:.03em}
+  .stat-nc{grid-column:span 2;border-top:1px solid var(--border);margin-top:.25rem;padding-top:.35rem}
+  .baseline-lbl{font-size:.62rem;color:var(--muted);margin-top:.5rem;letter-spacing:.03em}
+  .card-sub-val{font-size:1.3rem;font-weight:700;margin:.15rem 0 0}
+  .card-sub-lbl{color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;margin-top:.6rem}
   .charts{padding:0 2rem 2rem;display:grid;gap:1.5rem}
   .chart-box{background:var(--panel);border:1px solid var(--border);
              border-radius:12px;padding:1.2rem}
@@ -609,21 +610,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="card">
     <div class="lbl">Current dB(A)</div>
     <div class="val" id="c-cur">—</div>
+    <div class="card-sub-lbl">7-day Peak</div>
+    <div class="card-sub-val" id="c-peak">—</div>
   </div>
   <div class="card">
     <div class="lbl">☀️ Day (7am–10pm)</div>
     <div class="stat-grid">
       <div class="stat-item">
         <div><span class="stat-val" id="c-day-l90">—</span><span id="c-day-l90-d"></span></div>
-        <div class="stat-lbl">L90 <span class="stat-sub">background floor</span></div>
+        <div class="stat-lbl">L90 floor</div>
       </div>
       <div class="stat-item">
         <div><span class="stat-val" id="c-day-l10">—</span><span id="c-day-l10-d"></span></div>
-        <div class="stat-lbl">L10 <span class="stat-sub">intrusive level</span></div>
+        <div class="stat-lbl">L10 intrusive</div>
       </div>
       <div class="stat-item stat-nc">
         <div><span class="stat-val" id="c-day-nc">—</span><span id="c-day-nc-d"></span></div>
-        <div class="stat-lbl">Noise climate <span class="stat-sub">L10−L90 spread</span></div>
+        <div class="stat-lbl">NC (L10−L90)</div>
       </div>
     </div>
     <div class="baseline-lbl" id="c-day-base-lbl"></div>
@@ -633,22 +636,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="stat-grid">
       <div class="stat-item">
         <div><span class="stat-val" id="c-night-l90">—</span><span id="c-night-l90-d"></span></div>
-        <div class="stat-lbl">L90 <span class="stat-sub">background floor</span></div>
+        <div class="stat-lbl">L90 floor</div>
       </div>
       <div class="stat-item">
         <div><span class="stat-val" id="c-night-l10">—</span><span id="c-night-l10-d"></span></div>
-        <div class="stat-lbl">L10 <span class="stat-sub">intrusive level</span></div>
+        <div class="stat-lbl">L10 intrusive</div>
       </div>
       <div class="stat-item stat-nc">
         <div><span class="stat-val" id="c-night-nc">—</span><span id="c-night-nc-d"></span></div>
-        <div class="stat-lbl">Noise climate <span class="stat-sub">L10−L90 spread</span></div>
+        <div class="stat-lbl">NC (L10−L90)</div>
       </div>
     </div>
     <div class="baseline-lbl" id="c-night-base-lbl"></div>
-  </div>
-  <div class="card">
-    <div class="lbl">7-day Peak</div>
-    <div class="val" id="c-peak">—</div>
   </div>
   <div class="card" style="grid-column:span 2">
     <div class="lbl">Top Sources Today</div>
