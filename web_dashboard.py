@@ -549,12 +549,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .src-cnt{width:30px;text-align:right;color:var(--muted)}
   .play-btn{background:#6366f122;border:1px solid #6366f144;color:var(--text);
             border-radius:6px;padding:.2rem .55rem;cursor:pointer;font-size:.82rem;
-            white-space:nowrap}
+            white-space:nowrap;transition:background .15s,color .15s}
   .play-btn:hover{background:#6366f144}
+  .play-btn.active{background:#6366f1;color:#fff;border-color:#6366f1}
   #clip-player{position:fixed;bottom:0;left:0;right:0;background:var(--panel);
                border-top:1px solid var(--border);padding:.6rem 2rem;
                display:none;align-items:center;gap:1rem;z-index:100;
-               box-shadow:0 -4px 16px #0006}
+               box-shadow:0 -4px 16px #0006;transition:border-color .3s}
+  #clip-player.is-playing{border-top-color:#6366f1}
+  #clip-pulse{width:9px;height:9px;border-radius:50%;background:#6366f1;
+              flex-shrink:0;display:none}
+  #clip-player.is-playing #clip-pulse{display:block;animation:cpulse 1.2s ease-in-out infinite}
+  @keyframes cpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
   #clip-player-info{font-size:.85rem;min-width:0;flex:0 0 auto;max-width:280px;
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #clip-player audio{flex:1;height:36px;min-width:0}
@@ -651,6 +657,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <div id="clip-player">
+  <div id="clip-pulse"></div>
   <span id="clip-player-info"></span>
   <audio id="clip-audio" preload="auto"></audio>
   <button id="clip-close" title="Close" onclick="closePlayer()">✕</button>
@@ -898,7 +905,7 @@ async function refresh() {
           <td><span style="color:${e.conf>70?"#22c55e":e.conf>45?"#f59e0b":"#94a3b8"}">${e.conf}%</span></td>
           <td>${e.db}</td>
           <td style="font-size:.78rem;max-width:220px">${formatADSB(e.adsb)}</td>
-          <td>${e.clip ? `<button class="play-btn" onclick="playClip('/clips/${e.clip}','${e.source}','${e.t}')">▶ Play</button>` : ""}</td>
+          <td>${e.clip ? `<button class="play-btn" onclick="playClip('/clips/${e.clip}','${e.source}','${e.t}',this)">▶ Play</button>` : ""}</td>
         </tr>`).join("")}
       </tbody>
     </table>`;
@@ -917,8 +924,22 @@ const CLIP_DETECT_OFFSET = 10;  // seconds into clip where detection window begi
 const _clipAudio  = document.getElementById("clip-audio");
 const _clipPlayer = document.getElementById("clip-player");
 const _clipInfo   = document.getElementById("clip-player-info");
+let   _activeBtn  = null;
 
-function playClip(src, source, time) {
+function _setPlayingState(on) {
+  _clipPlayer.classList.toggle("is-playing", on);
+  if (_activeBtn) _activeBtn.classList.toggle("active", on);
+}
+
+_clipAudio.addEventListener("play",  () => _setPlayingState(true));
+_clipAudio.addEventListener("pause", () => _setPlayingState(false));
+_clipAudio.addEventListener("ended", () => _setPlayingState(false));
+
+function playClip(src, source, time, btn) {
+  // Mark the clicked button as active; clear the previous one
+  if (_activeBtn && _activeBtn !== btn) _activeBtn.classList.remove("active");
+  _activeBtn = btn || null;
+
   const label = (SOURCE_ICONS[source] || "🔊") + " " +
                 source.replace(/_/g, " ") + " · " +
                 new Date(time).toLocaleString();
@@ -931,7 +952,6 @@ function playClip(src, source, time) {
   }
 
   if (_clipAudio.dataset.src === src) {
-    // Same clip already loaded — just seek and play
     seekAndPlay();
   } else {
     _clipAudio.dataset.src = src;
@@ -947,6 +967,7 @@ function playClip(src, source, time) {
 function closePlayer() {
   _clipAudio.pause();
   _clipPlayer.style.display = "none";
+  _setPlayingState(false);
 }
 
 refresh();
