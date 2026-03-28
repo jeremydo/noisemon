@@ -52,7 +52,7 @@ DEDUP_DEFAULT     = 60                 # fallback for sources not in DEDUP_WINDO
 CATEGORY_MIN_DB   = {                  # minimum db_avg to log an event (filters quiet false positives)
     "aircraft":    44.0,
 }
-SUPPRESS_CATEGORIES = {"birds", "crows", "owl", "pool_pump"}  # detected internally but not logged as events
+SUPPRESS_CATEGORIES = {"birds", "crows", "owl", "pool_pump", "human_activity"}  # detected internally but not logged as events
 SUSTAINED_BASELINE_SECS = 300         # 5-min rolling ambient baseline
 SUSTAINED_ENERGY_ABOVE  = 3.0         # dB above ambient to count as elevated
 # ── ADS-B ─────────────────────────────────────────────────────────────────────
