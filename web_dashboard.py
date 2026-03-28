@@ -1012,11 +1012,11 @@ async function refresh() {
 
 // ── Label correction picker ───────────────────────────────────────────────────
 const CORRECT_LABELS = [
-  ["aircraft","✈️"],      ["road_traffic","🚗"],  ["leaf_blower","🍃"],
-  ["lawn_mower","🌿"],    ["strimmer","🌾"],       ["voices","🗣️"],
-  ["birds","🐦"],         ["crows","🐦‍⬛"],          ["owl","🦉"],
-  ["music","🎵"],         ["dog_barking","🐕"],    ["pool_pump","💧"],
-  ["false_positive","❌"],
+  ["aircraft","✈️"],        ["road_traffic","🚗"],    ["leaf_blower","🍃"],
+  ["lawn_mower","🌿"],      ["strimmer","🌾"],         ["voices","🗣️"],
+  ["birds","🐦"],           ["crows","🐦‍⬛"],            ["owl","🦉"],
+  ["music","🎵"],           ["dog_barking","🐕"],      ["pool_pump","💧"],
+  ["human_activity","🧑"],  ["false_positive","❌"],
 ];
 
 const _picker      = document.getElementById("label-picker");
@@ -1322,14 +1322,15 @@ let _newlyCreatedRegion = null;  // set on region-created; blocks spurious regio
 const LABEL_SHORTCUTS = {
   'a': 'aircraft', 'b': 'birds', 'c': 'crows', 'd': 'dog_barking',
   'l': 'leaf_blower', 'm': 'lawn_mower', 'o': 'owl', 't': 'road_traffic',
-  'p': 'pickleball', 's': 'strimmer', 'v': 'voices', 'u': 'pool_pump'
+  'p': 'pickleball', 's': 'strimmer', 'v': 'voices', 'u': 'pool_pump',
+  'h': 'human_activity'
 };
 const LABEL_DISPLAY = {
   aircraft:'(a)ircraft', birds:'(b)irds', crows:'(c)rows',
   dog_barking:'(d)og barking', leaf_blower:'(l)eaf blower',
   lawn_mower:'(m)ower', owl:'(o)wl', road_traffic:'(t)raffic',
   pickleball:'(p)ickleball', strimmer:'(s)trimmer', voices:'(v)oices',
-  pool_pump:'pool p(u)mp',
+  pool_pump:'pool p(u)mp', human_activity:'(h)uman activity',
   music:'music', unknown:'unknown', other:'other'
 };
 
