@@ -976,6 +976,27 @@ async function refresh() {
   document.getElementById("last-update").textContent =
     "Updated " + (summ.last_ts ? new Date(summ.last_ts).toLocaleTimeString() : new Date().toLocaleTimeString());
 
+  // Re-apply any pending corrections — guards against stale in-flight refreshes
+  // overwriting a label the user just corrected. Entry is cleared once the
+  // server starts returning the new label itself.
+  for (const [ts, label] of Object.entries(_corrections)) {
+    const row = document.querySelector(`tr[data-ts="${ts}"]`);
+    if (!row) continue;
+    const evtData = evts.find(e => String(e.ts) === ts);
+    if (evtData && evtData.source === label) {
+      delete _corrections[ts];   // server confirmed — no longer need to override
+      continue;
+    }
+    const badge = row.querySelector(".badge");
+    if (badge) {
+      badge.style.background = (SOURCE_COLORS[label]||"#6366f1") + "22";
+      badge.style.color      = SOURCE_COLORS[label]||"#6366f1";
+      badge.innerHTML        = `${SOURCE_ICONS[label]||"🔊"} ${label.replace(/_/g," ")}`;
+    }
+    const fixBtn = row.querySelector(".fix-btn");
+    if (fixBtn) fixBtn.setAttribute("onclick", `openPicker(${ts},'${_corrections[ts+"_clip"]||""}','${label}',event)`);
+  }
+
   // Re-sync play button state after table rebuild
   if (_clipAudio.dataset.src) {
     const clip = _clipAudio.dataset.src.replace("/clips/", "");
@@ -998,10 +1019,11 @@ const CORRECT_LABELS = [
   ["false_positive","❌"],
 ];
 
-const _picker     = document.getElementById("label-picker");
-const _pickerGrid = document.getElementById("label-picker-grid");
-let   _pickerTs   = null;
-let   _pickerClip = null;
+const _picker      = document.getElementById("label-picker");
+const _pickerGrid  = document.getElementById("label-picker-grid");
+let   _pickerTs    = null;
+let   _pickerClip  = null;
+const _corrections = {};   // ts (string) → label; overrides stale refreshes until server confirms
 
 function openPicker(ts, clip, currentSource, evt) {
   _pickerTs   = ts;
@@ -1030,20 +1052,22 @@ async function correctEvent(label) {
     body: JSON.stringify({ts_start: _pickerTs, clip_path: _pickerClip, label}),
   });
   if (!res.ok) return;
-  // Update the badge in-place without waiting for next refresh
-  const row   = document.querySelector(`tr[data-ts="${_pickerTs}"]`);
-  if (!row) return;
-  const badge = row.querySelector(".badge");
-  if (badge) {
-    badge.style.background = (SOURCE_COLORS[label]||"#6366f1") + "22";
-    badge.style.color      = SOURCE_COLORS[label]||"#6366f1";
-    // Preserve the fix button inside the td, only replace badge text nodes
-    badge.childNodes.forEach(n => { if (n.nodeType === 3) n.remove(); });
-    badge.innerHTML = `${SOURCE_ICONS[label]||"🔊"} ${label.replace(/_/g," ")}`;
+  // Record correction so stale in-flight refreshes can't overwrite it
+  const ts = String(_pickerTs);
+  _corrections[ts] = label;
+  _corrections[ts + "_clip"] = _pickerClip;
+  // Update the badge in-place immediately
+  const row = document.querySelector(`tr[data-ts="${ts}"]`);
+  if (row) {
+    const badge = row.querySelector(".badge");
+    if (badge) {
+      badge.style.background = (SOURCE_COLORS[label]||"#6366f1") + "22";
+      badge.style.color      = SOURCE_COLORS[label]||"#6366f1";
+      badge.innerHTML        = `${SOURCE_ICONS[label]||"🔊"} ${label.replace(/_/g," ")}`;
+    }
+    const fixBtn = row.querySelector(".fix-btn");
+    if (fixBtn) fixBtn.setAttribute("onclick", `openPicker(${ts},'${_pickerClip}','${label}',event)`);
   }
-  // Update fix button's current source
-  const fixBtn = row.querySelector(".fix-btn");
-  if (fixBtn) fixBtn.setAttribute("onclick", `openPicker(${_pickerTs},'${_pickerClip}','${label}',event)`);
 }
 
 // ── Clip player ───────────────────────────────────────────────────────────────
