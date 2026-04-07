@@ -60,11 +60,21 @@ def logout():
 def index():
     return render_template_string(DASHBOARD_HTML)
 
+_meas_cache = {}  # key: (period, agg) -> {"ts": int, "data": response}
+_MEAS_TTLS  = {"1h": 15, "6h": 30, "24h": 30, "7d": 120, "30d": 300, "90d": 600, "180d": 600}
+
 @app.route("/api/measurements")
 @require_auth
 def api_measurements():
     period = request.args.get("period", "24h")
     agg    = request.args.get("agg", "5m")
+    cache_key = (period, agg)
+    now = int(time.time())
+    ttl = _MEAS_TTLS.get(period, 30)
+    cached = _meas_cache.get(cache_key)
+    if cached and now - cached["ts"] < ttl:
+        from flask import Response
+        return Response(cached["data"], mimetype="application/json")
 
     periods = {"1h":3600,"6h":21600,"24h":86400,"7d":604800,
                "30d":2592000,"90d":7776000,"180d":15552000}
@@ -99,7 +109,11 @@ def api_measurements():
         "fm": round(r["fm"]*100,1) if r["fm"] else 0,
         "fh": round(r["fh"]*100,1) if r["fh"] else 0,
     } for r in rows]
-    return jsonify(data)
+    import json as _json
+    payload = _json.dumps(data)
+    _meas_cache[cache_key] = {"ts": now, "data": payload}
+    from flask import Response
+    return Response(payload, mimetype="application/json")
 
 @app.route("/api/events")
 @require_auth
@@ -129,10 +143,16 @@ def api_events():
         "adsb":   _json.loads(r["adsb_json"]) if r["adsb_json"] else None,
     } for r in rows])
 
+_summary_cache = {"ts": 0, "data": None}
+_SUMMARY_TTL   = 60  # seconds
+
 @app.route("/api/summary")
 @require_auth
 def api_summary():
     now = int(time.time())
+    if now - _summary_cache["ts"] < _SUMMARY_TTL and _summary_cache["data"] is not None:
+        from flask import Response
+        return Response(_summary_cache["data"], mimetype="application/json")
     # Day = 07:00–22:00 local, Night = 22:00–07:00 (matches CA noise ordinance hours)
     DAY_START, DAY_END = 7, 22
 
@@ -227,7 +247,7 @@ def api_summary():
     b_day_nc  = round(b_day_l10  - b_day_l90,  1) if b_day_l10  and b_day_l90  else None
     b_night_nc= round(b_night_l10- b_night_l90, 1) if b_night_l10 and b_night_l90 else None
 
-    return jsonify({
+    data = {
         "current_db":  round(last["db_avg"], 1)  if last and last["db_avg"]  else None,
         "peak_db":     round(last["db_peak"], 1) if last and last["db_peak"] else None,
         "last_ts":     ts_to_iso(last["ts"])     if last and last["ts"]      else None,
@@ -251,7 +271,13 @@ def api_summary():
         "day_n":            len(day_vals),
         "night_n":          len(night_vals),
         "top_sources": [{"source": r["source"], "count": r["cnt"]} for r in event_counts],
-    })
+    }
+    import json as _json2
+    payload = _json2.dumps(data)
+    _summary_cache["data"] = payload
+    _summary_cache["ts"]   = now
+    from flask import Response
+    return Response(payload, mimetype="application/json")
 
 @app.route("/api/clips")
 @require_auth
