@@ -24,7 +24,7 @@ A neighborhood noise monitor running on a Raspberry Pi 4. Records audio continuo
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/noisemon.git /opt/noisemon
+git clone https://github.com/jeremydo/noisemon.git /opt/noisemon
 cd /opt/noisemon
 cp config.example.py config.py
 # Edit config.py — set AUTH_PASS and your ADSB_LAT/LON
