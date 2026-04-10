@@ -3,7 +3,7 @@
 
 from flask import Flask, render_template_string, jsonify, request, Response, \
                   session, redirect, url_for
-import sqlite3, time, functools, os
+import sqlite3, time, functools, os, threading
 from datetime import datetime
 
 DB_PATH     = "/var/lib/noisemon/noise.db"
@@ -501,6 +501,128 @@ def api_delete_review_segment(seg_id):
     with get_conn() as c:
         c.execute("DELETE FROM segments WHERE rowid=?", (seg_id,))
     return jsonify({"ok": True})
+
+# ── Outlier analysis ───────────────────────────────────────────────────────────
+
+_OUTLIER_FEATURES = "/opt/noisemon/models/features.npz"
+_OUTLIER_CLIPS    = "/var/lib/noisemon/clips"
+_OUTLIER_MIN_SAMPLES = 5
+
+_outliers_cache = {"status": "idle", "computed_at": None, "items": [], "accuracy": None}
+_outliers_lock  = threading.Lock()
+
+def _run_outlier_analysis():
+    import numpy as np
+    try:
+        try:
+            from sklearn.svm import SVC
+            from sklearn.preprocessing import LabelEncoder, StandardScaler
+            from sklearn.pipeline import Pipeline
+            from sklearn.model_selection import StratifiedKFold, cross_val_predict
+        except ImportError:
+            raise RuntimeError("scikit-learn not installed on this system")
+
+        data  = np.load(_OUTLIER_FEATURES, allow_pickle=True)
+        X_all = data["X"]
+        y_all = data["y"]
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows_all = conn.execute(
+            "SELECT rowid, clip_path, t_start, t_end, label FROM segments ORDER BY label"
+        ).fetchall()
+        conn.close()
+
+        meta = []
+        for r in rows_all:
+            clip_file = os.path.join(_OUTLIER_CLIPS, r["clip_path"])
+            if not os.path.exists(clip_file):
+                continue
+            t_start = max(0.0, float(r["t_start"]))
+            t_end   = float(r["t_end"])
+            if t_end - t_start < 0.5:
+                continue
+            meta.append(dict(r))
+
+        n = min(len(meta), len(X_all))
+        meta, X_all, y_all = meta[:n], X_all[:n], y_all[:n]
+
+        classes, counts = np.unique(y_all, return_counts=True)
+        keep  = set(c for c, cnt in zip(classes, counts) if cnt >= _OUTLIER_MIN_SAMPLES)
+        mask  = np.array([lbl in keep for lbl in y_all])
+        X     = X_all[mask]
+        y_raw = y_all[mask]
+        meta_f = [m for m, k in zip(meta, mask) if k]
+
+        le = LabelEncoder()
+        y  = le.fit_transform(y_raw)
+
+        _, kept_counts = np.unique(y_raw, return_counts=True)
+        n_splits = min(5, int(min(kept_counts)))
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("svm",    SVC(kernel="rbf", C=10, gamma="scale",
+                           probability=True, class_weight="balanced")),
+        ])
+        y_pred  = cross_val_predict(pipe, X, y, cv=cv)
+        y_proba = cross_val_predict(pipe, X, y, cv=cv, method="predict_proba")
+
+        accuracy   = float((y_pred == y).mean())
+        true_conf  = y_proba[np.arange(len(y)), y]
+        pred_names = le.inverse_transform(y_pred)
+
+        items = []
+        for i, m in enumerate(meta_f):
+            items.append({
+                "seg_id":     int(m.get("rowid") or 0),
+                "clip":       m["clip_path"],
+                "t_start":    float(m["t_start"]),
+                "t_end":      float(m["t_end"]),
+                "true_label": m["label"],
+                "predicted":  str(pred_names[i]),
+                "confidence": float(true_conf[i]),
+            })
+        items.sort(key=lambda x: x["confidence"])
+
+        with _outliers_lock:
+            _outliers_cache.update({
+                "status":      "ready",
+                "computed_at": int(time.time()),
+                "items":       items,
+                "accuracy":    round(accuracy * 100, 1),
+                "error":       None,
+            })
+    except Exception as e:
+        with _outliers_lock:
+            _outliers_cache.update({
+                "status":      "error",
+                "error":       str(e),
+                "computed_at": None,
+                "items":       [],
+                "accuracy":    None,
+            })
+
+
+@app.route("/api/outliers/compute", methods=["POST"])
+@require_auth
+def api_outliers_compute():
+    with _outliers_lock:
+        if _outliers_cache["status"] == "computing":
+            return jsonify({"status": "computing"})
+        _outliers_cache["status"] = "computing"
+    t = threading.Thread(target=_run_outlier_analysis, daemon=True)
+    t.start()
+    return jsonify({"status": "computing"})
+
+
+@app.route("/api/outliers")
+@require_auth
+def api_outliers():
+    with _outliers_lock:
+        return jsonify(dict(_outliers_cache))
+
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -1271,8 +1393,19 @@ LABEL_HTML = """<!DOCTYPE html>
     <div class="tabs">
       <div class="tab active" onclick="showTab('unlabelled')">Unlabelled</div>
       <div class="tab" onclick="showTab('labelled')">Done</div>
+      <div class="tab" onclick="showTab('outliers')">Outliers</div>
     </div>
     <div id="clip-list"></div>
+    <div id="outlier-panel" style="display:none;flex-direction:column;gap:.5rem;padding:.75rem">
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <button onclick="computeOutliers()" style="font-size:.8rem;padding:.35rem .75rem">Compute</button>
+        <span id="outlier-status" style="font-size:.78rem;color:var(--muted)"></span>
+      </div>
+      <div id="outlier-spinner" style="display:none;text-align:center;padding:.5rem">
+        <div class="spinner" style="width:24px;height:24px;border-width:2px;margin:0 auto"></div>
+      </div>
+      <div id="outlier-list"></div>
+    </div>
   </div>
 
   <!-- Main: waveform + labelling -->
@@ -1344,6 +1477,7 @@ let currentTab = "unlabelled";
 let regionStartTime = null;   // set when a label key is pressed to mark start
 let skipNextRegionCreated = false;  // set before programmatic addRegion() calls
 let _newlyCreatedRegion = null;  // set on region-created; blocks spurious region-clicked on other regions
+let pendingSeekTime = null;  // set by outlier row click; consumed on waveform ready
 
 const LABEL_SHORTCUTS = {
   'a': 'aircraft', 'b': 'birds', 'c': 'crows', 'd': 'dog_barking',
@@ -1364,9 +1498,12 @@ const LABEL_DISPLAY = {
 function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t,i) => {
-    t.classList.toggle("active", (i===0&&tab==="unlabelled")||(i===1&&tab==="labelled"));
+    t.classList.toggle("active",
+      (i===0&&tab==="unlabelled")||(i===1&&tab==="labelled")||(i===2&&tab==="outliers"));
   });
-  loadClipList();
+  document.getElementById("clip-list").style.display     = tab === "outliers" ? "none"  : "block";
+  document.getElementById("outlier-panel").style.display = tab === "outliers" ? "flex"  : "none";
+  if(tab === "outliers") loadOutliers(); else loadClipList();
 }
 
 // ── Clip list ─────────────────────────────────────────────────────────────────
@@ -1608,6 +1745,12 @@ async function loadClip(clipPath, idx, source='', conf=0) {
     });
     activeSegmentIdx = -1;
     if(existing.length) renderSegments();
+
+    // Auto-seek when clip was opened from the Outliers tab
+    if(pendingSeekTime !== null) {
+      ws.setTime(pendingSeekTime);
+      pendingSeekTime = null;
+    }
   });
 
   ws.on("error", err => {
@@ -1872,6 +2015,106 @@ document.addEventListener("keydown", e => {
     return;
   }
 });
+
+// ── Outliers tab ──────────────────────────────────────────────────────────────
+let outlierPollTimer = null;
+
+async function computeOutliers() {
+  await fetch("/api/outliers/compute", {method:"POST"});
+  startOutlierPolling();
+}
+
+function startOutlierPolling() {
+  if(outlierPollTimer) clearInterval(outlierPollTimer);
+  outlierPollTimer = setInterval(pollOutliers, 2000);
+  pollOutliers();
+}
+
+async function pollOutliers() {
+  const data = await fetch("/api/outliers").then(r=>r.json());
+  if(data.status === "ready" || data.status === "error" || data.status === "idle") {
+    if(outlierPollTimer) { clearInterval(outlierPollTimer); outlierPollTimer = null; }
+  }
+  renderOutlierPanel(data);
+}
+
+async function loadOutliers() {
+  const data = await fetch("/api/outliers").then(r=>r.json());
+  renderOutlierPanel(data);
+  if(data.status === "computing") startOutlierPolling();
+}
+
+function renderOutlierPanel(data) {
+  const statusEl = document.getElementById("outlier-status");
+  const spinEl   = document.getElementById("outlier-spinner");
+  const listEl   = document.getElementById("outlier-list");
+  if(!statusEl) return;
+
+  spinEl.style.display = data.status === "computing" ? "block" : "none";
+
+  if(data.status === "idle") {
+    statusEl.textContent = "Not computed yet";
+    listEl.innerHTML = "";
+    return;
+  }
+  if(data.status === "computing") {
+    statusEl.textContent = "Computing… (~30s)";
+    return;
+  }
+  if(data.status === "error") {
+    statusEl.textContent = "Error: " + (data.error || "unknown");
+    listEl.innerHTML = "";
+    return;
+  }
+
+  // ready
+  const at = data.computed_at
+    ? new Date(data.computed_at * 1000).toLocaleTimeString()
+    : "";
+  statusEl.textContent =
+    `${data.items.length} segs · CV ${data.accuracy}% · ${at}`;
+
+  if(!data.items.length) {
+    listEl.innerHTML = "<div style='color:var(--muted);font-size:.85rem;padding:.5rem 0'>No items</div>";
+    return;
+  }
+
+  // Group by true_label
+  const byClass = {};
+  for(const item of data.items) {
+    if(!byClass[item.true_label]) byClass[item.true_label] = [];
+    byClass[item.true_label].push(item);
+  }
+
+  let html = "";
+  for(const cls of Object.keys(byClass).sort()) {
+    const items = byClass[cls];
+    const color = SOURCE_COLORS[cls] || "#6b7280";
+    html += `<div style="font-size:.72rem;font-weight:700;text-transform:uppercase;
+                         color:${color};margin:.75rem 0 .2rem;letter-spacing:.05em">${cls}</div>`;
+    html += items.map(item => {
+      const confPct = Math.round(item.confidence * 100);
+      const correct = item.true_label === item.predicted;
+      const badgeColor = confPct < 30 ? "var(--red)" : confPct < 60 ? "var(--yellow)" : "var(--green)";
+      const clipShort  = item.clip.replace(/^\d{8}_\d{6}_(.+)\.wav$/, "$1").slice(0,22);
+      const predTxt    = correct ? "" : ` · ${item.predicted}`;
+      return `<div class="clip-item" onclick="loadOutlierClip('${item.clip}', ${item.t_start})">
+        <div style="display:flex;align-items:center;gap:.4rem">
+          <span style="color:${badgeColor};font-weight:700;font-size:.78rem;min-width:2.2rem">${confPct}%</span>
+          <span style="color:${correct?'var(--green)':'var(--red)'};font-size:.85rem">${correct?'✓':'✗'}</span>
+          <span class="clip-name" style="font-size:.78rem">${clipShort}</span>
+        </div>
+        <div class="clip-meta">t=${item.t_start.toFixed(1)}–${item.t_end.toFixed(1)}s${predTxt}</div>
+      </div>`;
+    }).join("");
+  }
+  listEl.innerHTML = html;
+}
+
+function loadOutlierClip(clipPath, tStart) {
+  pendingSeekTime = tStart;
+  loadClip(clipPath, -1, '', 0);
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadClipList();
