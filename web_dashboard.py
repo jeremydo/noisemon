@@ -624,6 +624,57 @@ def api_outliers():
         return jsonify(dict(_outliers_cache))
 
 
+# ── Retrain ────────────────────────────────────────────────────────────────────
+
+_retrain_cache = {"status": "idle", "step": "", "error": None, "completed_at": None}
+_retrain_lock  = threading.Lock()
+
+def _run_retrain():
+    import subprocess
+    venv_python = "/opt/noisemon/venv/bin/python3"
+    steps = [
+        ("Extracting features…", "/opt/noisemon/extract_features.py"),
+        ("Training classifier…", "/opt/noisemon/train_classifier.py"),
+    ]
+    try:
+        for step_name, script in steps:
+            with _retrain_lock:
+                _retrain_cache["step"] = step_name
+            result = subprocess.run(
+                [venv_python, script], cwd="/opt/noisemon",
+                capture_output=True, text=True, timeout=600
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"{script} failed:\n{result.stderr[-500:]}")
+        with _retrain_lock:
+            _retrain_cache.update({
+                "status": "done", "step": "", "error": None,
+                "completed_at": int(time.time()),
+            })
+    except Exception as e:
+        with _retrain_lock:
+            _retrain_cache.update({"status": "error", "step": "", "error": str(e)})
+
+
+@app.route("/api/retrain", methods=["POST"])
+@require_auth
+def api_retrain_start():
+    with _retrain_lock:
+        if _retrain_cache["status"] == "running":
+            return jsonify({"status": "running"})
+        _retrain_cache.update({"status": "running", "step": "Starting…", "error": None})
+    t = threading.Thread(target=_run_retrain, daemon=True)
+    t.start()
+    return jsonify({"status": "running"})
+
+
+@app.route("/api/retrain/status")
+@require_auth
+def api_retrain_status():
+    with _retrain_lock:
+        return jsonify(dict(_retrain_cache))
+
+
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1398,9 +1449,11 @@ LABEL_HTML = """<!DOCTYPE html>
     <div id="clip-list"></div>
     <div id="outlier-panel" style="display:none;flex-direction:column;gap:.5rem;padding:.75rem">
       <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-        <button onclick="computeOutliers()" style="font-size:.8rem;padding:.35rem .75rem">Compute</button>
-        <span id="outlier-status" style="font-size:.78rem;color:var(--muted)"></span>
+        <button onclick="computeOutliers()" style="font-size:.8rem;padding:.35rem .75rem">Compute Outliers</button>
+        <button onclick="retrainClassifier()" style="font-size:.8rem;padding:.35rem .75rem">Retrain Classifier</button>
       </div>
+      <span id="outlier-status" style="font-size:.78rem;color:var(--muted)"></span>
+      <span id="retrain-status" style="display:none;font-size:.78rem"></span>
       <div id="outlier-spinner" style="display:none;text-align:center;padding:.5rem">
         <div class="spinner" style="width:24px;height:24px;border-width:2px;margin:0 auto"></div>
       </div>
@@ -1456,11 +1509,12 @@ const SOURCE_COLORS = {
   aircraft:"#818cf8", leaf_blower:"#fb923c", pickleball:"#34d399",
   road_traffic:"#94a3b8", lawn_mower:"#fbbf24", dog_barking:"#f87171",
   music:"#e879f9", voices:"#67e8f9", crows:"#86efac", birds:"#4ade80",
-  owl:"#a5b4fc", strimmer:"#f59e0b", unknown:"#6b7280", other:"#a78bfa"
+  owl:"#a5b4fc", strimmer:"#f59e0b", unknown:"#6b7280", other:"#a78bfa",
+  raindrops:"#7dd3fc"
 };
 const LABELS = ["aircraft","leaf_blower","lawn_mower","strimmer","pickleball",
                 "road_traffic","dog_barking","music","voices",
-                "crows","birds","owl","unknown","other"];
+                "crows","birds","owl","raindrops","unknown","other"];
 
 let ws = null;
 let wsRegions = null;
@@ -1477,19 +1531,21 @@ let currentTab = "unlabelled";
 let regionStartTime = null;   // set when a label key is pressed to mark start
 let skipNextRegionCreated = false;  // set before programmatic addRegion() calls
 let _newlyCreatedRegion = null;  // set on region-created; blocks spurious region-clicked on other regions
-let pendingSeekTime = null;  // set by outlier row click; consumed on waveform ready
+let pendingSeekTime = null;      // set by outlier row click; consumed on waveform ready
+let outlierItems = [];           // current flat wrong-items list, for Next navigation
+let currentOutlierKey = null;    // clip:tStart key of the currently loaded outlier row
 
 const LABEL_SHORTCUTS = {
   'a': 'aircraft', 'b': 'birds', 'c': 'crows', 'd': 'dog_barking',
   'l': 'leaf_blower', 'm': 'lawn_mower', 'o': 'owl', 't': 'road_traffic',
-  'p': 'pickleball', 's': 'strimmer', 'v': 'voices', 'u': 'pool_pump',
-  'h': 'human_activity'
+  'p': 'pickleball', 'r': 'raindrops', 's': 'strimmer', 'v': 'voices',
+  'u': 'pool_pump', 'h': 'human_activity'
 };
 const LABEL_DISPLAY = {
   aircraft:'(a)ircraft', birds:'(b)irds', crows:'(c)rows',
   dog_barking:'(d)og barking', leaf_blower:'(l)eaf blower',
   lawn_mower:'(m)ower', owl:'(o)wl', road_traffic:'(t)raffic',
-  pickleball:'(p)ickleball', strimmer:'(s)trimmer', voices:'(v)oices',
+  pickleball:'(p)ickleball', raindrops:'(r)aindrops', strimmer:'(s)trimmer', voices:'(v)oices',
   pool_pump:'pool p(u)mp', human_activity:'(h)uman activity',
   music:'music', unknown:'unknown', other:'other'
 };
@@ -1934,14 +1990,24 @@ async function saveSegments() {
     `✓ Saved ${result.saved} segments`;
 
   clearSegments();
-  const nextIdx = clips.findIndex(c => c.clip === currentClip) + 1;
-  loadClipList();
-  if(nextIdx < clips.length) loadClip(clips[nextIdx].clip, nextIdx);
+  if(currentTab === "outliers") {
+    const curIdx = outlierItems.findIndex(i => `${i.clip}:${i.t_start}` === currentOutlierKey);
+    const next   = outlierItems[curIdx + 1];
+    if(next) loadOutlierClip(next.clip, next.t_start);
+  } else {
+    const nextIdx = clips.findIndex(c => c.clip === currentClip) + 1;
+    loadClipList();
+    if(nextIdx < clips.length) loadClip(clips[nextIdx].clip, nextIdx);
+  }
 }
 
 async function nextClip() {
   if(segments.length) {
     await saveSegments();  // saves and advances automatically
+  } else if(currentTab === "outliers") {
+    const curIdx = outlierItems.findIndex(i => `${i.clip}:${i.t_start}` === currentOutlierKey);
+    const next   = outlierItems[curIdx + 1];
+    if(next) loadOutlierClip(next.clip, next.t_start);
   } else {
     const idx = clips.findIndex(c => c.clip === currentClip);
     if(idx >= 0 && idx < clips.length - 1) loadClip(clips[idx+1].clip, idx+1);
@@ -2067,53 +2133,100 @@ function renderOutlierPanel(data) {
     return;
   }
 
-  // ready
+  // ready — flat list, worst first. ✗ misclassified on top, ✓ low-confidence-but-correct dimmed below.
+  const wrong   = data.items.filter(i => i.true_label !== i.predicted);  // already sorted asc by conf
+  const correct = data.items.filter(i => i.true_label === i.predicted);
+  outlierItems = wrong;  // store for Next → navigation
+
   const at = data.computed_at
     ? new Date(data.computed_at * 1000).toLocaleTimeString()
     : "";
-  statusEl.textContent =
-    `${data.items.length} segs · CV ${data.accuracy}% · ${at}`;
+  statusEl.textContent = `${wrong.length} misclassified · CV ${data.accuracy}% · ${at}`;
 
   if(!data.items.length) {
-    listEl.innerHTML = "<div style='color:var(--muted);font-size:.85rem;padding:.5rem 0'>No items</div>";
+    listEl.innerHTML = "<div style='color:var(--green);font-size:.85rem;padding:.5rem 0'>No outliers found.</div>";
     return;
   }
 
-  // Group by true_label
-  const byClass = {};
-  for(const item of data.items) {
-    if(!byClass[item.true_label]) byClass[item.true_label] = [];
-    byClass[item.true_label].push(item);
+  function renderRow(item, dimmed) {
+    const confPct    = Math.round(item.confidence * 100);
+    const isWrong    = item.true_label !== item.predicted;
+    const badgeColor = dimmed ? "var(--muted)" : confPct < 30 ? "var(--red)" : "var(--yellow)";
+    const clipShort  = item.clip.replace(/^\d{8}_\d{6}_(.+)\.wav$/, "$1").slice(0, 24);
+    const meta       = isWrong
+      ? `${item.true_label} · pred: ${item.predicted} · t=${item.t_start.toFixed(1)}–${item.t_end.toFixed(1)}s`
+      : `${item.true_label} · low confidence · t=${item.t_start.toFixed(1)}–${item.t_end.toFixed(1)}s`;
+    return `<div class="clip-item" data-okey="${item.clip}:${item.t_start}" style="${dimmed ? 'opacity:.4' : ''}"
+                 onclick="loadOutlierClip('${item.clip}', ${item.t_start})">
+      <div style="display:flex;align-items:center;gap:.4rem">
+        <span style="color:${badgeColor};font-weight:700;font-size:.78rem;min-width:2.2rem">${confPct}%</span>
+        <span style="color:${dimmed?'var(--muted)':'var(--red)'};font-size:.85rem">${isWrong?'✗':'✓'}</span>
+        <span class="clip-name" style="font-size:.78rem">${clipShort}</span>
+      </div>
+      <div class="clip-meta">${meta}</div>
+    </div>`;
   }
 
-  let html = "";
-  for(const cls of Object.keys(byClass).sort()) {
-    const items = byClass[cls];
-    const color = SOURCE_COLORS[cls] || "#6b7280";
-    html += `<div style="font-size:.72rem;font-weight:700;text-transform:uppercase;
-                         color:${color};margin:.75rem 0 .2rem;letter-spacing:.05em">${cls}</div>`;
-    html += items.map(item => {
-      const confPct = Math.round(item.confidence * 100);
-      const correct = item.true_label === item.predicted;
-      const badgeColor = confPct < 30 ? "var(--red)" : confPct < 60 ? "var(--yellow)" : "var(--green)";
-      const clipShort  = item.clip.replace(/^\d{8}_\d{6}_(.+)\.wav$/, "$1").slice(0,22);
-      const predTxt    = correct ? "" : ` · ${item.predicted}`;
-      return `<div class="clip-item" onclick="loadOutlierClip('${item.clip}', ${item.t_start})">
-        <div style="display:flex;align-items:center;gap:.4rem">
-          <span style="color:${badgeColor};font-weight:700;font-size:.78rem;min-width:2.2rem">${confPct}%</span>
-          <span style="color:${correct?'var(--green)':'var(--red)'};font-size:.85rem">${correct?'✓':'✗'}</span>
-          <span class="clip-name" style="font-size:.78rem">${clipShort}</span>
-        </div>
-        <div class="clip-meta">t=${item.t_start.toFixed(1)}–${item.t_end.toFixed(1)}s${predTxt}</div>
-      </div>`;
-    }).join("");
+  let html = wrong.map(i => renderRow(i, false)).join("");
+  if(correct.length) {
+    html += `<div style="font-size:.72rem;color:var(--muted);padding:.6rem .25rem .2rem;
+                         border-top:1px solid var(--border);margin-top:.4rem">
+               Low confidence but correctly classified — review if time
+             </div>`;
+    html += correct.map(i => renderRow(i, true)).join("");
   }
   listEl.innerHTML = html;
 }
 
 function loadOutlierClip(clipPath, tStart) {
   pendingSeekTime = tStart;
+  currentOutlierKey = `${clipPath}:${tStart}`;
   loadClip(clipPath, -1, '', 0);
+  // loadClip clears all .clip-item active states synchronously — re-highlight this outlier row
+  document.querySelectorAll("[data-okey]").forEach(el => {
+    el.classList.toggle("active", el.dataset.okey === currentOutlierKey);
+  });
+}
+
+// ── Retrain classifier ────────────────────────────────────────────────────────
+let retrainPollTimer = null;
+
+async function retrainClassifier() {
+  if(!confirm("Retrain classifier? This re-extracts features and retrains the model (~3-5 min on RPi). Continue?")) return;
+  const el = document.getElementById("retrain-status");
+  el.style.display = "block";
+  el.style.color = "var(--muted)";
+  el.textContent = "Starting retrain…";
+  await fetch("/api/retrain", {method: "POST"});
+  startRetrainPolling();
+}
+
+function startRetrainPolling() {
+  if(retrainPollTimer) clearInterval(retrainPollTimer);
+  retrainPollTimer = setInterval(checkRetrainStatus, 3000);
+  checkRetrainStatus();
+}
+
+async function checkRetrainStatus() {
+  const data = await fetch("/api/retrain/status").then(r => r.json());
+  const el = document.getElementById("retrain-status");
+  if(!el) return;
+  el.style.display = "block";
+  if(data.status === "idle") {
+    el.style.display = "none";
+  } else if(data.status === "running") {
+    el.style.color = "var(--muted)";
+    el.textContent = data.step || "Running…";
+  } else if(data.status === "done") {
+    el.style.color = "var(--green)";
+    const at = data.completed_at ? new Date(data.completed_at * 1000).toLocaleTimeString() : "";
+    el.textContent = `Retrain complete ${at} — click Compute Outliers to refresh`;
+    if(retrainPollTimer) { clearInterval(retrainPollTimer); retrainPollTimer = null; }
+  } else if(data.status === "error") {
+    el.style.color = "var(--red)";
+    el.textContent = "Retrain failed: " + (data.error || "unknown error");
+    if(retrainPollTimer) { clearInterval(retrainPollTimer); retrainPollTimer = null; }
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
