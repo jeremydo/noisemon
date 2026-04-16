@@ -55,11 +55,6 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-@app.route("/bipyramid")
-def bipyramid_page():
-    from flask import send_from_directory
-    return send_from_directory("/opt/noisemon/static", "bipyramid.html")
-
 @app.route("/")
 @require_auth
 def index():
