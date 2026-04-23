@@ -73,8 +73,8 @@ CATEGORY_MAP = [
                       "mechanical fan"]),
     ("lawn_mower",   ["lawn mower", "mower", "chainsaw", "power tool",
                       "electric motor", "engine", "lawn", "mechanical"]),
-    ("pickleball",   ["tennis", "racquet", "ball", "bouncing", "ping",
-                      "whack", "crack", "pop"]),
+    # pickleball removed — no confirmed samples yet; "pop"/"crack"/"ping" cause
+    # false positives from rain drips. Re-add once real clips exist.
     ("road_traffic", ["traffic", "car", "vehicle", "truck", "bus", "motorcycle",
                       "motor vehicle", "accelerating", "skidding", "horn",
                       "beep", "road", "highway"]),
@@ -813,23 +813,7 @@ class AudioProcessor:
 
             for cat, hits in cat_hits.most_common():
                 score = cat_scores[cat]
-                if cat == "pickleball":
-                    if hits >= PATTERN_MIN_HITS and score >= CATEGORY_THRESH.get(cat, CONFIDENCE_THRESH):
-                        hit_times = sorted(t for t, c, _ in recent if c == "pickleball")
-                        if len(hit_times) >= PATTERN_MIN_HITS:
-                            gaps = [hit_times[i+1]-hit_times[i]
-                                    for i in range(len(hit_times)-1)]
-                            avg_gap = np.mean(gaps)
-                            gap_std = np.std(gaps)
-                            if 0.5 <= avg_gap <= 4.0 and gap_std < avg_gap * 0.8:
-                                yamnet_confirmed.setdefault("pickleball", score)
-                                log.info("Pickleball pattern confirmed: "
-                                         "%d hits, avg_gap=%.1fs", hits, avg_gap)
-                            elif hits >= 2 and score >= CATEGORY_THRESH.get(cat, CONFIDENCE_THRESH):
-                                yamnet_confirmed.setdefault("pickleball", score)
-                            elif score >= 0.4:
-                                yamnet_confirmed.setdefault("pickleball", score)
-                elif cat == "aircraft":
+                if cat == "aircraft":
                     pass  # already handled above
                 else:
                     if hits >= PATTERN_MIN_HITS and score >= CATEGORY_THRESH.get(cat, CONFIDENCE_THRESH):

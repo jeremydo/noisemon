@@ -39,6 +39,14 @@ def main():
     X, y_raw = data["X"], data["y"]
     print(f"Loaded {len(X)} samples, {X.shape[1]} features")
 
+    # Explicitly ignored labels (ambiguous/multi-source clips — not useful for training)
+    IGNORE_CLASSES = {"false_positive"}
+    ignore_mask = np.array([lbl not in IGNORE_CLASSES for lbl in y_raw])
+    if (~ignore_mask).any():
+        ignored = set(y_raw[~ignore_mask])
+        print(f"Ignoring classes (ambiguous): {ignored}")
+    X, y_raw = X[ignore_mask], y_raw[ignore_mask]
+
     # Drop rare classes
     classes, counts = np.unique(y_raw, return_counts=True)
     keep_classes = set(c for c, n in zip(classes, counts) if n >= args.min_samples)
