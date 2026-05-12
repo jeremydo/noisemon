@@ -138,6 +138,11 @@ def init_db():
     if "adsb_json" not in cols:
         conn.execute("ALTER TABLE events ADD COLUMN adsb_json TEXT")
         log.info("DB migration: added adsb_json column to events")
+    # Migration: add db_fast_max (LAFmax) to existing measurements
+    mcols = {r[1] for r in conn.execute("PRAGMA table_info(measurements)")}
+    if "db_fast_max" not in mcols:
+        conn.execute("ALTER TABLE measurements ADD COLUMN db_fast_max REAL")
+        log.info("DB migration: added db_fast_max column to measurements")
     conn.commit(); conn.close()
     log.info("DB ready: %s", DB_PATH)
 
@@ -663,14 +668,30 @@ class AudioProcessor:
         db_peak = rms_db(np.max(np.abs(block)))
         db_min  = rms_db(np.percentile(np.abs(block) + 1e-12, 10))
 
+        # db_fast_max: LAFmax — A-weighted maximum using 125ms "Fast" time constant.
+        # Split the 1s block into 8 × 125ms sub-blocks, compute A-weighted RMS for
+        # each, take the maximum.  Matches IEC 61672 LAFmax used in environmental
+        # noise standards (NR curves, WHO guidelines, planning noise assessments).
+        sub_n   = n // 8
+        sub_dbs = []
+        for i in range(8):
+            sb      = block[i*sub_n:(i+1)*sub_n]
+            sw      = scipy.signal.windows.hann(len(sb))
+            sf      = np.abs(scipy.fft.rfft(sb * sw))
+            sfr     = scipy.fft.rfftfreq(len(sb), d=1.0 / SAMPLE_RATE)
+            sf_a    = sf * a_weight(np.maximum(sfr, 1.0)) * (10.0 ** (cal_curve(sfr) / 20.0))
+            sp_w    = (sf_a[0]**2 + 2*np.sum(sf_a[1:-1]**2) + sf_a[-1]**2) / len(sb)**2
+            sub_dbs.append(rms_db(np.sqrt(sp_w / np.mean(sw**2))))
+        db_fast_max = max(sub_dbs)
+
         # ── Store measurement ──
         with get_conn() as c:
             c.execute(
                 "INSERT INTO measurements "
-                "(ts,db_avg,db_peak,db_min,freq_low,freq_mid,freq_high) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "(ts,db_avg,db_peak,db_min,freq_low,freq_mid,freq_high,db_fast_max) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (ts, round(db_avg,2), round(db_peak,2), round(db_min,2),
-                 round(fl,4), round(fm,4), round(fh,4))
+                 round(fl,4), round(fm,4), round(fh,4), round(db_fast_max,2))
             )
 
         # ── Feed sustained-source detector ──

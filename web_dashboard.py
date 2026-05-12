@@ -87,9 +87,10 @@ def api_measurements():
     with get_conn() as c:
         rows = c.execute("""
             SELECT (ts/?)*? AS bucket,
-                   AVG(db_avg)   AS db_avg,
-                   MAX(db_peak)  AS db_peak,
-                   MIN(db_min)   AS db_min,
+                   AVG(db_avg)      AS db_avg,
+                   MAX(db_peak)     AS db_peak,
+                   MIN(db_min)      AS db_min,
+                   MAX(db_fast_max) AS db_fast_max,
                    AVG(freq_low)  AS fl,
                    AVG(freq_mid)  AS fm,
                    AVG(freq_high) AS fh,
@@ -101,10 +102,11 @@ def api_measurements():
         """, (bucket, bucket, since, DB_CEILING, DB_CEILING)).fetchall()
 
     data = [{
-        "t":       ts_to_iso(r["bucket"]),
-        "db_avg":  round(r["db_avg"],1)  if r["db_avg"]  else None,
-        "db_peak": round(r["db_peak"],1) if r["db_peak"] else None,
-        "db_min":  round(r["db_min"],1)  if r["db_min"]  else None,
+        "t":            ts_to_iso(r["bucket"]),
+        "db_avg":       round(r["db_avg"],1)       if r["db_avg"]       else None,
+        "db_peak":      round(r["db_peak"],1)      if r["db_peak"]      else None,
+        "db_min":       round(r["db_min"],1)        if r["db_min"]       else None,
+        "db_fast_max":  round(r["db_fast_max"],1)  if r["db_fast_max"]  else None,
         "fl": round(r["fl"]*100,1) if r["fl"] else 0,
         "fm": round(r["fm"]*100,1) if r["fm"] else 0,
         "fh": round(r["fh"]*100,1) if r["fh"] else 0,
@@ -158,7 +160,7 @@ def api_summary():
 
     with get_conn() as c:
         last = c.execute(
-            "SELECT ts, db_avg, db_peak FROM measurements ORDER BY ts DESC LIMIT 1"
+            "SELECT ts, db_avg, db_peak, db_fast_max FROM measurements ORDER BY ts DESC LIMIT 1"
         ).fetchone()
         rows_24h = c.execute("""
             SELECT db_avg,
@@ -1101,11 +1103,13 @@ async function refresh() {
 
   const xStart = times.length ? times[0] : now;
   Plotly.react("chart-db", [
-    {x:times, y:meas.map(m=>m.db_peak), name:"Peak",
-     mode:"lines", line:{color:"#f87171",width:1}, opacity:.7, hoverinfo:"none"},
-    {x:times, y:meas.map(m=>m.db_avg),  name:"Average",
+    {x:times, y:meas.map(m=>m.db_peak),     name:"Peak (flat)",
+     mode:"lines", line:{color:"#f87171",width:1}, opacity:.5, hoverinfo:"none"},
+    {x:times, y:meas.map(m=>m.db_fast_max), name:"LAFmax",
+     mode:"lines", line:{color:"#fb923c",width:1.5}, opacity:.85, hoverinfo:"none"},
+    {x:times, y:meas.map(m=>m.db_avg),      name:"LAeq,1s",
      mode:"lines", line:{color:"#818cf8",width:2}, hoverinfo:"none"},
-    {x:times, y:meas.map(m=>m.db_min),  name:"Min",
+    {x:times, y:meas.map(m=>m.db_min),      name:"Min",
      mode:"lines", line:{color:"#4ade80",width:1}, opacity:.6, hoverinfo:"none"},
     evtTrace,
   ], {
