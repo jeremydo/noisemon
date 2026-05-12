@@ -503,10 +503,13 @@ class TrainedClassifier:
     def predict(self, yamnet_scores_per_window: np.ndarray):
         """
         scores_per_window: (N, 521) array from YAMNet inference.
-        Returns (category, probability) or None if no model loaded.
+        Returns a list of (category, probability) for every class whose
+        binary classifier exceeds 0.60.  Multiple classes can fire at once,
+        which handles clips where several sources overlap (e.g. aircraft +
+        birds + voices).  Returns empty list if no model loaded.
         """
         if self._pipe is None:
-            return None
+            return []
         try:
             feat = np.concatenate([
                 yamnet_scores_per_window.mean(axis=0),
@@ -514,17 +517,17 @@ class TrainedClassifier:
                 yamnet_scores_per_window.std(axis=0),
             ]).reshape(1, -1).astype(np.float32)
 
-            proba  = self._pipe.predict_proba(feat)[0]
-            best   = int(np.argmax(proba))
-            label  = self._le.classes_[best]
-            conf   = float(proba[best])
-            log.debug("TrainedCls: %s=%.2f  (all: %s)", label, conf,
-                      " ".join(f"{c}={p:.2f}"
-                               for c, p in zip(self._le.classes_, proba)))
-            return label, conf
+            proba = self._pipe.predict_proba(feat)[0]   # (n_classes,) — one prob per binary clf
+            log.debug("TrainedCls: %s",
+                      " ".join(f"{c}={p:.2f}" for c, p in zip(self._le.classes_, proba)))
+            results = [(self._le.classes_[i], float(proba[i]))
+                       for i in range(len(self._le.classes_))
+                       if proba[i] >= 0.60]
+            results.sort(key=lambda x: -x[1])
+            return results
         except Exception as e:
             log.warning("Trained classifier predict failed: %s", e)
-            return None
+            return []
 
 
 # ── ADS-B tracker ─────────────────────────────────────────────────────────────
@@ -763,16 +766,13 @@ class AudioProcessor:
         top3 = ", ".join(f"{c}={s:.2f}" for c, s in results[:3])
         log.info("YAMNet top3: %s  dB=%.1f", top3, db_mean)
 
-        # Trained classifier — if confident (≥60%), add as a strong detection hit
+        # Trained classifier — one-vs-rest: multiple classes can fire simultaneously.
         aircraft_hit_this_cycle = False
-        trained_result = self._trained.predict(all_scores_arr)
-        if trained_result:
-            tc_label, tc_conf = trained_result
-            if tc_conf >= 0.60:
-                self._detection_hist.append((ts, tc_label, tc_conf))
-                log.info("TrainedCls: %-14s  conf=%.0f%%", tc_label, tc_conf * 100)
-                if tc_label == "aircraft":
-                    aircraft_hit_this_cycle = True
+        for tc_label, tc_conf in self._trained.predict(all_scores_arr):
+            self._detection_hist.append((ts, tc_label, tc_conf))
+            log.info("TrainedCls: %-14s  conf=%.0f%%", tc_label, tc_conf * 100)
+            if tc_label == "aircraft":
+                aircraft_hit_this_cycle = True
 
         # Record every category that meets its threshold so background sources
         # (leaf_blower, aircraft) can accumulate hits even when a louder source dominates.

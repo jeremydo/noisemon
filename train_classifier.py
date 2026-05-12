@@ -25,6 +25,7 @@ def main():
 
     try:
         from sklearn.svm import SVC
+        from sklearn.multiclass import OneVsRestClassifier
         from sklearn.preprocessing import LabelEncoder, StandardScaler
         from sklearn.pipeline import Pipeline
         from sklearn.model_selection import StratifiedKFold, cross_val_score
@@ -63,11 +64,14 @@ def main():
     le = LabelEncoder()
     y  = le.fit_transform(y_raw)
 
-    # Pipeline: scale → SVM (RBF kernel)
+    # Pipeline: scale → one-vs-rest binary SVMs (one per class).
+    # Each class gets its own decision boundary; multiple classes can fire
+    # simultaneously at inference time, which handles overlapping sources.
     pipe = Pipeline([
         ("scaler", StandardScaler()),
-        ("svm",    SVC(kernel="rbf", C=10, gamma="scale",
-                       probability=True, class_weight="balanced")),
+        ("ovr",    OneVsRestClassifier(
+                       SVC(kernel="rbf", C=10, gamma="scale",
+                           probability=True, class_weight="balanced"))),
     ])
 
     # Cross-validation
